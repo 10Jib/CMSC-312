@@ -6,11 +6,17 @@
 #include <stdlib.h>
 #include <queue>
 #include <time.h>
+#include <mutex>
+
+#include <thread>
 
 
 using namespace std;
 
 int systime = 0;
+
+bool critical = false;
+
 
 int get_process_count()
 {
@@ -25,6 +31,10 @@ public:
 	
 	queue <char> instructions;
 	string name;
+	Process* parent;
+	Process* child;
+
+	bool isCritical = false; 
 
 
 	Process(string name = "process") {
@@ -54,12 +64,18 @@ public:
 				instructions.push(type);
 			}
 		} 
+		else if (type == 'E' || type == 'L' || type == 'F') {
+			instructions.push(type);
+		}
 		else
 		{
 			cout << "BAD INSTRUCTION TYPE";
 		}
 	}
 
+	void addInstruction(char type) {
+		instructions.push(type);
+	}
 
 	// This defaults as a random binomial number generator
 	int random(int average = 5, int deviation = 2) {
@@ -78,7 +94,20 @@ public:
 			instructions.pop();
 			int k = i * j;
 		}
-		
+		else if (this->getNextInstruction() == 'E') {
+			if (this->isCritical == false) {
+				cout << "\nEntering Critical Section...\n";
+				this->isCritical = true;
+			} 
+			instructions.pop();		
+		}
+		else if (this->getNextInstruction() == 'L') {
+			if (this->isCritical == true) {
+				cout << "..Leaving Critical Section\n";
+				this->isCritical = false;
+			}
+			instructions.pop();
+		}
 	}
 };
 
@@ -90,9 +119,38 @@ class pcb : public Process {
 	string status;
 	int executed_cycles = 0;
 	int ttk = this->getInstuctionCount();  // Time to Kill
+	string childStatus;
 
 	using Process::Process;
-	
+
+	// creates new process and hands off pointer
+public:	void fork() {
+		// at this time process can only have one child
+		if (this->child == NULL) {
+			Process newchild = Process(name);
+			cout << "[*] New child!\n";
+
+			newchild.parent = this;
+			this->child = &newchild;
+			this->childStatus = "Active";
+		}
+	}
+
+	// goes down dynamic linked child list, and terminates
+public:	void terminate() {
+		cout << "[X] Child terminated!\n";
+		this->childStatus = "TERMINATED";
+
+		//Process* thisChild = this->child;
+		//thisChild->child.Status = "TERMINATED";
+		/*This is the part that would terminate all childproccesses, like a linked list
+		while (thisChild->child != NULL) {
+			thisChild->childStatus = "TERMINATED";
+			thisChild = thisChild->child;
+		}*/
+
+	}
+
 	string getStatus() {
 		return(status);
 	}
@@ -125,15 +183,113 @@ public : void setStatus(string newstatus) {
 	}
 };
 
+
+class storage_drive {
+	// The first frame will be used to index the drive.
+	// So with this setup a max of 1000 frames can be represented in one.
+	// While limmiting, it makes things simpler for me.
+
+	int frameSize = 1000;
+	int totalFrams = frameSize + 1;
+	int frameIndexLocation = 0;
+	string driveName = "";
+	//ofstream file_obj;
+
+public: storage_drive(string name) {
+		driveName = name;
+
+
+	}
+
+	void load_drive(string name) {
+		// framesize, and count is assumed same.
+
+	}
+
+	void allocateSpace(int frameCount = 1) {
+		//finds a spot in memory and allocates space
+	}
+
+public: void saveProcess(pcb *process, int location) {
+		ofstream file_obj;
+		file_obj.open(driveName, ios::out);
+		file_obj.seekp(location*frameSize);
+
+		string name = process->name;
+		int size = strlen((char *)&name);
+
+		int i;
+		for (i = 0; i < size; i++) {
+			file_obj.put((char)name[i]);
+		}
+
+		file_obj.put(' ');
+		while (!process->instructions.empty()) {
+			file_obj.put(process->instructions.front());
+			process->instructions.pop();
+		}
+		file_obj.close();
+	}
+
+public: pcb loadProcess(int location) {
+		fstream file_obj;
+		file_obj.open(driveName, ios::in);
+		file_obj.seekg(location*frameSize);
+
+
+		string name = "";
+		char curchar;
+
+		while (file_obj >> noskipws >> curchar) {
+			if (curchar == ' ') {
+				break;
+			}
+			name + curchar;
+		}
+		pcb process(name);
+
+		while (file_obj >> noskipws >> curchar) {
+			if (curchar == ' ') {
+				break;
+			}
+			process.addInstruction(curchar);
+		}
+
+		file_obj.close();
+		return(process);
+	}
+
+	void deleteProcess() {
+
+	}
+
+	void write_frame() {
+
+	}
+
+	string read_frame() {
+
+	}
+
+	void wipe_frame() {
+
+	}
+
+};
+
+//The single storage drive for this OS
+storage_drive CDrive("CDrive.txt");
+
 //waiting queue for IO
 queue<pcb> waiting;
 
+
 //ready queue ready for calc
 queue<pcb> ready;
+std::mutex readyMutex;
 
-// Program counter
-pcb current_process;
 class dispatcher {
+	pcb current_process;
 	int startingSize;
 
 public : void load(pcb nextProces) {
@@ -207,8 +363,22 @@ void LoadProcess(string name) {
 	ready.push(thisProcess);
 }
 
+void load_round_Robbin() {
+	pcb current_process;
+	int i;
+
+	// store all of the processes into memory
+	for (i = 0; i < ready.size(); i++) {
+		current_process = ready.front();
+		CDrive.saveProcess(&current_process, i + 1);
+		ready.pop();
+		ready.push(current_process);
+	}
+}
 
 void round_robbin() {
+	pcb current_process;
+
 	//time slice
 	int p_time = 5;
 	dispatcher disp;
@@ -216,16 +386,49 @@ void round_robbin() {
 	// go through the queue until all progams have finished
 	while (!ready.empty())
 	{
+		// wait until queue is ready
+		while (!readyMutex.try_lock()) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+		}
+
+		if (ready.empty()) {
+			readyMutex.unlock();
+			break;  // If the queue is emptied while waiting this will break the loop
+		}
+
 		// pop from queue, and load program
 		current_process = ready.front();
 		disp.load(ready.front());
 		ready.pop();
-
+		readyMutex.unlock();
 
 		for (int i = 0; i < p_time; i++) {
-			if (current_process.getNextInstruction() == 'C') {
+			if (current_process.getNextInstruction() == 'E') {
+				// wants to enter critical
+				if (critical) {
+					// another process is critical
+					break;
+				}
+				else {
+					// process can be critical
+					critical = true;
+					current_process.calculate();
+				}
+			}
+			else if (current_process.getNextInstruction() == 'L') {
+				if (critical && current_process.isCritical) {
+					// process is already in critical and wants to leave
+					current_process.calculate();
+					critical = false;
+				}
+			}
+			else if (current_process.getNextInstruction() == 'C') {
 				// perform calculations
 				current_process.calculate();
+			}
+			else if (current_process.getNextInstruction() == 'F') {
+				current_process.fork();
+				current_process.instructions.pop();
 			}
 			else {
 				// The program is not ready
@@ -247,30 +450,33 @@ void round_robbin() {
 		}
 
 		else if (current_process.getNextInstruction() == 'X') {
+			current_process.terminate();
 			cout << "[*]" << current_process.name << " has finished running." << endl;
-			cout << "\t Cycles completed:" << current_process.get_executed_cycles() << endl;
+			//cout << "\t Cycles completed:" << current_process.get_executed_cycles() << endl;
 		}
 		
 		
 	} 
 }
 
-// As an honest confesion... This mode tends to lose track of cycles,
-//	probably because of how the dispatcher works with the pcb,
-//	and how the dispatcher is used in this mode. 
-//  I have a feeling this problem will resolve itself when I face my fear of pointers,
-//	and embrace oject oriented programming more religiously... Which you will see in assignment 3...  
-void priorityQ() {
+queue<pcb> higher; // smaller processes
+std::mutex higherMutex;
+
+queue<pcb> lower; // larger processes
+std::mutex lowerMutex;
+
+// This section had to be reworked to handle the concurrent processing
+// it was not fun debugging this... butatleast I have the satisfaction that I know that it works...
+// or atleast that I dont know that it doesnt work, but rest assured, in theory everything should work
+
+void organizePQ() {
 	// splits process queue into smaller, and larger processes.
 	// Then will round robin untill they are done.
 	// This will allow the smaller processes to be finished earlier
-	// -without ignoring the larger ones
+	// without ignoring the larger ones
+	// when the smaller ones are finished first, it will give more cpu time to the larger-
+	// processes that could have stalled the smaller ones
 
-	queue<pcb> higher; // smaller processes
-	queue<pcb> lower; // larger processes
-	// its possible to distinguish even further and have a middle tier
-
-	// first we will grab the average size, to differentiate 
 	int total_load = 0;
 	int pcount = ready.size();
 
@@ -294,23 +500,63 @@ void priorityQ() {
 			ready.pop();
 		}
 	}
+}
+
+void priorityQ() {
 	// Queue has been sorted into a higher, and lower priority
 	// Now it will run both queues with a different time slices
 	// I did it this way so the smaller processes will be finished quickly, but the larger processes will not be starved. 
 	// Although, as of yet because all of the processes will be more or less the same size it doesnt really give mutch advantage. 
 	// In the future I may want to add a way to update the priority queues, for when the high queue gets empty
+
+	pcb current_process;
 	dispatcher disp;
 	while (!higher.empty() || !lower.empty())
 	{
 
-		if (!higher.empty()){	
+		if (!higher.empty()){
+			// wait until queue is ready
+			while (!higherMutex.try_lock()) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+
+			if (higher.empty()) {
+				higherMutex.unlock();
+				continue;  // If the queue is emptied while waiting this will cycle just incase lower queue is still full.
+			}
+
 			disp.load(higher.front());
+			current_process = higher.front();
 			higher.pop();
+			higherMutex.unlock();
 
 			for (int i = 0; i < 15; i++) {
-				if (current_process.getNextInstruction() == 'C') {
+				if (current_process.getNextInstruction() == 'E') {
+					// wants to enter critical
+					if (critical) {
+						// another process is critical
+						break;
+					}
+					else {
+						// process can be critical
+						critical = true;
+						current_process.calculate();
+					}
+				}
+				else if (current_process.getNextInstruction() == 'L') {
+					if (critical && current_process.isCritical) {
+						// process is already in critical and wants to leave
+						current_process.calculate();
+						critical = false;
+					}
+				}
+				else if (current_process.getNextInstruction() == 'C') {
 					// perform calculations
 					current_process.calculate();
+				}
+				else if (current_process.getNextInstruction() == 'F') {
+					current_process.fork();
+					current_process.instructions.pop();
 				}
 				else {
 					// The program is not ready
@@ -334,6 +580,7 @@ void priorityQ() {
 			}
 
 			else if (current_process.getNextInstruction() == 'X') {
+				current_process.terminate();
 				cout << "[*]" << current_process.name << " has finished running." << endl;
 				cout << "\t Cycles completed:" << current_process.get_executed_cycles() << endl;
 			}
@@ -342,13 +589,48 @@ void priorityQ() {
 		
 
 		if (!lower.empty()) {
+			// wait until queue is ready
+			while (!lowerMutex.try_lock()) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+
+			if (lower.empty()) {
+				lowerMutex.unlock();
+				continue;  // If the queue is emptied while waiting this will cycle just incase higher queue is still full.
+			}
+
 			disp.load(lower.front());
+			current_process = lower.front();
 			lower.pop();
+			lowerMutex.unlock();
 
 			for (int i = 0; i < 3; i++) {
-				if (current_process.getNextInstruction() == 'C') {
+				if (current_process.getNextInstruction() == 'E') {
+					// wants to enter critical
+					if (critical) {
+						// another process is critical
+						break;
+					}
+					else {
+						// process can be critical
+						critical = true;
+						current_process.calculate();
+					}
+				}
+				else if (current_process.getNextInstruction() == 'L') {
+					if (critical && current_process.isCritical) {
+						// process is already in critical and wants to leave
+						current_process.calculate();
+						critical = false;
+					}
+				}
+				else if (current_process.getNextInstruction() == 'C') {
 					// perform calculations
 					current_process.calculate();
+				}
+				else if (current_process.getNextInstruction() == 'F') {
+					current_process.fork();
+					current_process.instructions.pop();
 				}
 				else {
 					// The program is not ready
@@ -373,6 +655,7 @@ void priorityQ() {
 			}
 
 			else if (current_process.getNextInstruction() == 'X') {
+				current_process.terminate();
 				cout << "[*]" << current_process.name << " has finished running." << endl;
 				cout << "\t Cycles completed:" << current_process.get_executed_cycles() << endl;
 			}
@@ -385,8 +668,8 @@ void priorityQ() {
 
 int main()
 {
-	int iSecret, iGuess;
-	srand(time(NULL));
+	//int iSecret, iGuess;
+	//srand(time(NULL));
 
 	cout << "\tWelcome to OwOS\n";
 	cout << "Here are the programs detected, enter the character for the program you would like to generate.\n";
@@ -446,9 +729,26 @@ int main()
 	cin >> resp;
 
 	if (resp == 'q' || resp == 'Q') {
-		priorityQ();
+		organizePQ();
+
+		std::thread first(priorityQ);
+		std::thread seccond(priorityQ);
+		std::thread third(priorityQ);
+
+		first.join();
+		seccond.join();
+		third.join();
+
 	} else if (resp == 'r' || resp == 'R') {
-		round_robbin();
+		load_round_Robbin();
+
+		std::thread first(round_robbin);
+		std::thread seccond(round_robbin);
+		std::thread third(round_robbin);
+
+		first.join();
+		seccond.join();
+		third.join();
 	}
 	
 	//cout << "Time at finish: " << systime << endl;

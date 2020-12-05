@@ -2,7 +2,10 @@
 s
 spotify
 IO 1
+E
 CALC 1
+L
+Fork
 IO 2
 IO 3
 CALC 2
@@ -13,7 +16,10 @@ csgo
 CALC 1
 IO 1
 IO 2
+E
 CALC 2
+L
+Fork
 IO 3
 CALC 3
 IO 4
@@ -24,7 +30,10 @@ IO 1
 CALC 1
 CALC 2
 IO 2
+Fork
+E
 CALC 3
+L
 
 v
 vr
@@ -34,7 +43,9 @@ IO 2
 CALC 2
 IO 3
 IO 4
+E
 CALC 3
+L
 IO 5
 CALC 4
 IO 6
@@ -46,7 +57,9 @@ toaster
 CALC 1
 CALC 2
 CALC 3
+E
 CALC 4
+L
 CALC 5
 CALC 6
 CALC 7
